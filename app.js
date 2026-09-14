@@ -1,7 +1,172 @@
-const v=document.getElementById("video"),drop=document.getElementById("drop"),details=document.getElementById("details"),preview=document.getElementById("preview"),image=document.getElementById("image"),ref=document.getElementById("ref"),range=document.getElementById("range"),val=document.getElementById("val");let style="Cinematic Anime",file=null;
-drop.addEventListener("click",e=>{if(e.target!==preview)v.click()});v.addEventListener("change",()=>pick(v.files[0]));drop.addEventListener("dragover",e=>e.preventDefault());drop.addEventListener("drop",e=>{e.preventDefault();pick(e.dataTransfer.files[0])});
-function pick(f){if(!f||!f.type.startsWith("video/"))return;if(f.size>2*1024*1024*1024){details.textContent="Demo upload limit: 2 GB.";return}file=f;details.textContent=`${f.name} · ${(f.size/1024/1024).toFixed(1)} MB`;preview.src=URL.createObjectURL(f);preview.hidden=false}
-document.querySelectorAll(".styles button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".styles button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");style=b.dataset.style});
-image.onchange=()=>{if(image.files[0])ref.childNodes[0].nodeValue="✓ "+image.files[0].name+" "};ref.onclick=()=>image.click();range.oninput=()=>val.textContent=range.value+"%";
-document.getElementById("generate").onclick=()=>{if(!file){alert("Upload a video first.");return}const q=document.getElementById("queue"),r=document.getElementById("result"),bar=document.getElementById("bar"),pct=document.getElementById("pct"),chunks=document.getElementById("chunks"),qt=document.getElementById("qtitle"),tx=document.getElementById("qtext");q.hidden=false;r.hidden=true;q.scrollIntoView({behavior:"smooth"});let p=0,total=Math.max(1,Math.ceil((preview.duration||300)/30));const t=setInterval(()=>{p=Math.min(100,p+Math.floor(Math.random()*8)+3);let done=Math.floor(total*p/100);bar.style.width=p+"%";pct.textContent=p+"%";chunks.textContent=`Chunks: ${done} / ${total}`;qt.textContent=p<100?"Processing your anime video…":"Stitching final video…";tx.textContent=p<35?"Analyzing motion and scenes…":p<75?"Applying anime style consistently…":"Rendering and joining processed chunks…";if(p===100){clearInterval(t);document.getElementById("styleResult").textContent=style;setTimeout(()=>{r.hidden=false;r.scrollIntoView({behavior:"smooth"})},600)}},300)};
-document.getElementById("again").onclick=()=>{document.getElementById("result").hidden=true;document.getElementById("queue").hidden=true;window.location.hash="convert";location.reload()};document.getElementById("download").onclick=()=>alert("Prototype: the production backend will place the generated MP4 here for download.");
+const video = document.getElementById("video");
+const drop = document.getElementById("drop");
+const details = document.getElementById("details");
+const generate = document.getElementById("generate");
+const result = document.getElementById("result");
+const again = document.getElementById("again");
+
+const API = "https://animeflow-api.mahi934717.workers.dev";
+
+let selectedVideo = null;
+let referenceImage = null;
+
+drop.addEventListener("click", () => video.click());
+
+video.addEventListener("change", () => {
+  selectedVideo = video.files[0] || null;
+
+  if (!selectedVideo) return;
+
+  if (!selectedVideo.type.startsWith("video/")) {
+    alert("Please select a video file.");
+    selectedVideo = null;
+    return;
+  }
+
+  if (selectedVideo.size > 100 * 1024 * 1024) {
+    alert("For this first test, please use a video under 100 MB.");
+    selectedVideo = null;
+    return;
+  }
+
+  details.textContent =
+    `${selectedVideo.name} • ${(selectedVideo.size / 1024 / 1024).toFixed(1)} MB`;
+});
+
+const ref = document.getElementById("reference");
+
+if (ref) {
+  ref.addEventListener("change", () => {
+    referenceImage = ref.files[0] || null;
+  });
+}
+
+document.querySelectorAll(".styles button").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".styles button").forEach((b) => {
+      b.classList.remove("active");
+    });
+
+    button.classList.add("active");
+  });
+});
+
+generate.addEventListener("click", async () => {
+  if (!selectedVideo) {
+    alert("Please upload a video first.");
+    return;
+  }
+
+  generate.disabled = true;
+  generate.textContent = "Uploading…";
+
+  result.hidden = true;
+
+  try {
+    const form = new FormData();
+
+    form.append("video", selectedVideo);
+
+    const activeStyle =
+      document.querySelector(".styles button.active");
+
+    form.append(
+      "style",
+      activeStyle?.dataset.style || "cinematic"
+    );
+
+    form.append("mode", "flex_1");
+
+    if (referenceImage) {
+      form.append("reference", referenceImage);
+    }
+
+    const response = await fetch(`${API}/generate`, {
+      method: "POST",
+      body: form
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.message ||
+        data.error ||
+        "Generation request failed."
+      );
+    }
+
+    generate.textContent = "Processing…";
+
+    const predictionId = data.prediction_id;
+
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      const statusResponse = await fetch(
+        `${API}/status/${predictionId}`
+      );
+
+      const statusData = await statusResponse.json();
+
+      if (
+        statusData.status === "succeeded" &&
+        statusData.output
+      ) {
+        showResult(statusData.output);
+        break;
+      }
+
+      if (
+        statusData.status === "failed" ||
+        statusData.status === "canceled"
+      ) {
+        throw new Error(
+          statusData.error || "AI generation failed."
+        );
+      }
+
+      generate.textContent =
+        `Processing… ${statusData.status || ""}`;
+    }
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    generate.disabled = false;
+    generate.textContent = "Generate anime video";
+  }
+});
+
+function showResult(output) {
+  const outputUrl =
+    Array.isArray(output) ? output[0] : output;
+
+  result.hidden = false;
+
+  const existingVideo =
+    result.querySelector("video");
+
+  if (existingVideo) {
+    existingVideo.src = outputUrl;
+  }
+
+  const download =
+    result.querySelector("a");
+
+  if (download) {
+    download.href = outputUrl;
+    download.download = "animeflow-result.mp4";
+  }
+
+  result.scrollIntoView({
+    behavior: "smooth"
+  });
+}
+
+again.addEventListener("click", () => {
+  result.hidden = true;
+  video.value = "";
+  selectedVideo = null;
+  referenceImage = null;
+  details.textContent = "";
+});
